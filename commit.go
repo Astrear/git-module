@@ -15,6 +15,9 @@ import (
 	"strings"
 
 	"github.com/mcuadros/go-version"
+
+	//New Includes
+	"regexp"
 )
 
 // Commit represents a git commit.
@@ -307,4 +310,133 @@ func GetCommitFileStatus(repoPath, commitID string) (*CommitFileStatus, error) {
 // FileStatus returns file status of commit.
 func (c *Commit) FileStatus() (*CommitFileStatus, error) {
 	return GetCommitFileStatus(c.repo.Path, c.ID.String())
+}
+
+
+//  _________                        .__  __             ________                    .__     
+//  \_   ___ \  ____   _____   _____ |__|/  |_  ______  /  _____/___________  ______ |  |__  
+//  /    \  \/ /  _ \ /     \ /     \|  \   __\/  ___/ /   \  __\_  __ \__  \ \____ \|  |  \ 
+//  \     \___(  <_> )  Y Y  \  Y Y  \  ||  |  \___ \  \    \_\  \  | \// __ \|  |_> >   Y  \
+//   \______  /\____/|__|_|  /__|_|  /__||__| /____  >  \______  /__|  (____  /   __/|___|  /
+//          \/             \/      \/              \/          \/           \/|__|        \/ 
+
+
+type CommitsPerUser struct {
+	NumCommits int64
+	Date       string
+	User       string
+}
+
+type CommitsInfo struct {
+	Info  []*CommitsPerUser
+	Total int64
+}
+
+func commitsCountPerCollab(repoPath, user string) (*CommitsInfo, error) {
+	var cmd *Command
+
+	cmd = NewCommand("log", "--author='"+user+"'", "| grep Date ", "| awk '{print\":\"$4\"-\"$3\"-\"$6}'", "| uniq -c")
+	stdout, err := cmd.RunPipesInDir(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if user == "" {
+		user = "all"
+	}
+
+	commits := &CommitsInfo{
+		Info:  []*CommitsPerUser{},
+		Total: 0,
+	}
+
+	lines := strings.Split(stdout, "\n")
+	lines = lines[:len(lines)-1]
+
+	if len(lines) > 0 {
+		for _, line := range lines {
+			info := strings.SplitN(line, ":", 2)
+			numcommits, _ := strconv.ParseInt(strings.TrimSpace(info[0]), 10, 64)
+			//fmt.Printf("Numcommits :%d   -----  Date : %s   :      User: %s\n", numcommits, info[1], user)
+			commits.Info = append(commits.Info, &CommitsPerUser{
+				NumCommits: numcommits,
+				Date:       info[1],
+				User:       user,
+			})
+			commits.Total += numcommits
+		}
+	} else {
+		commits.Info = append(commits.Info, &CommitsPerUser{
+			NumCommits: 0,
+			Date:       "00-000-0000",
+			User:       user,
+		})
+		commits.Total = 0
+	}
+	return commits, nil
+}
+
+func (c *Commit) CommitsCountPerCollab(user string) (*CommitsInfo, error) {
+	return commitsCountPerCollab(c.repo.Path, user)
+}
+
+type StatsUser struct {
+	Insertions int64
+	Deletions  int64
+	Author     string
+	Files      int
+}
+
+func numStatCommitsPerUser(user, repoPath string) (*StatsUser, error) {
+	var cmd *Command
+	cmd = NewCommand("log", "--numstat")
+	cmd.AddArguments("--pretty=tformat:")
+	cmd.AddArguments("--author=" + user)
+	cmd.AddArguments("--until=now")
+
+	stdout, err := cmd.RunInDir(repoPath)
+	if err != nil {
+		fmt.Printf("ERROR: %v", err)
+		return nil, err
+	}
+
+	//stats := StatsUser{}
+	lines := strings.Split(stdout, "\n")
+	lines = lines[:len(lines)-1]
+	var insertions, deletions int64
+
+	for _, line := range lines {
+		re := regexp.MustCompile("[0-9]+")
+		numeros := re.FindAllString(line, -1)
+		var ins, del int64
+		ins = 0
+		del = 0
+
+		if len(numeros) == 2 {
+			ins, err = strconv.ParseInt(strings.TrimSpace(numeros[0]), 10, 64)
+			if err != nil {
+				ins = 0
+			}
+			del, err = strconv.ParseInt(strings.TrimSpace(numeros[1]), 10, 64)
+			if err != nil {
+				del = 0
+			}
+		}
+
+		insertions = insertions + ins
+		deletions = deletions + del
+	}
+
+	st := &StatsUser{
+		Insertions: insertions,
+		Deletions:  deletions,
+		Author:     user,
+		Files:      len(lines),
+	}
+
+	return st, err
+}
+
+func (c *Commit) NumStatCommitsPerUser(user string) (*StatsUser, error) {
+	return numStatCommitsPerUser(user, c.repo.Path)
 }

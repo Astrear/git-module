@@ -148,3 +148,76 @@ func (c *Command) RunTimeout(timeout time.Duration) (string, error) {
 func (c *Command) Run() (string, error) {
 	return c.RunTimeout(-1)
 }
+
+
+//  _________                        .__  __             ________                    .__     
+//  \_   ___ \  ____   _____   _____ |__|/  |_  ______  /  _____/___________  ______ |  |__  
+//  /    \  \/ /  _ \ /     \ /     \|  \   __\/  ___/ /   \  __\_  __ \__  \ \____ \|  |  \ 
+//  \     \___(  <_> )  Y Y  \  Y Y  \  ||  |  \___ \  \    \_\  \  | \// __ \|  |_> >   Y  \
+//   \______  /\____/|__|_|  /__|_|  /__||__| /____  >  \______  /__|  (____  /   __/|___|  /
+//          \/             \/      \/              \/          \/           \/|__|        \/ 
+
+
+func (c *Command) RunPipesInDirTimeoutPipeline(timeout time.Duration, dir string, stdout, stderr io.Writer) error {
+	if timeout == -1 {
+		timeout = DEFAULT_TIMEOUT
+	}
+
+	if len(dir) == 0 {
+		log(c.String())
+	} else {
+		log("%s: %v", dir, c)
+	}
+
+	cmd := exec.Command("bash", "-c", c.String())
+	cmd.Dir = dir
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	//fmt.Printf("\n\n%+v\n\n", cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	done := make(chan error)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	var err error
+	select {
+	case <-time.After(timeout):
+		if cmd.Process != nil && cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
+			if err := cmd.Process.Kill(); err != nil {
+				return fmt.Errorf("fail to kill process: %v", err)
+			}
+		}
+
+		<-done
+		return ErrExecTimeout{timeout}
+	case err = <-done:
+	}
+
+	return err
+}
+
+func (c *Command) RunPipesInDirTimeout(timeout time.Duration, dir string) ([]byte, error) {
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	if err := c.RunPipesInDirTimeoutPipeline(timeout, dir, stdout, stderr); err != nil {
+		return nil, concatenateError(err, stderr.String())
+	}
+
+	if stdout.Len() > 0 {
+		log("stdout:\n%s", stdout.Bytes()[:1024])
+	}
+	return stdout.Bytes(), nil
+}
+
+
+func (c *Command) RunPipesInDir(dir string) (string, error) {
+	stdout, err := c.RunPipesInDirTimeout(-1, dir)
+	if err != nil {
+		return "", err
+	}
+	return string(stdout), nil
+}
